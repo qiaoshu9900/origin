@@ -1,0 +1,1483 @@
+#!/usr/bin/env python3
+
+import http.server
+import socketserver
+import urllib.parse
+import json
+import re
+import os
+import tempfile
+from datetime import datetime
+import cgi
+import io
+
+class BGPParser:
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.bgp_config = {
+            'asNumber': '',
+            'routerId': '',
+            'globalNeighbors': [],
+            'vrfs': [],
+            'neighborGroups': [],
+            'routePolicies': [],
+            'prefixSets': {},
+            'communitySets': [],
+            'asPathSets': [],
+            'extcommunitySets': []
+        }
+
+    def parse_config(self, content):
+        """Parse BGP configuration from content"""
+        self.reset()
+
+        # Clean content and split into lines
+        content = content.replace('\ufeff', '')  # Remove BOM
+        lines = []
+        for line in content.split('\n'):
+            line = line.rstrip()
+            if line and not line.isspace():
+                lines.append(line)
+
+        print(f"Total lines to parse: {len(lines)}")
+
+        # Parse in order
+        self._parse_prefix_sets(lines)
+        self._parse_community_sets(lines)
+        self._parse_as_path_sets(lines)
+        self._parse_extcommunity_sets(lines)
+        self._parse_route_policies(lines)
+        self._parse_bgp_section(lines)
+
+        pass  # Summary will be shown in main
+
+        return self.bgp_config
+
+    def _parse_prefix_sets(self, lines):
+        """Parse prefix-set definitions"""
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith('prefix-set '):
+                prefix_name = line.split()[1]
+                prefixes = []
+                i += 1
+                while i < len(lines):
+                    line = lines[i].strip()
+                    if line == 'end-set':
+                        break
+                    if line and not line.startswith('!'):
+                        # Remove trailing comma
+                        prefix = line.rstrip(',').strip()
+                        if prefix:
+                            prefixes.append(prefix)
+                    i += 1
+                self.bgp_config['prefixSets'][prefix_name] = prefixes
+                pass  # Removed detailed logging
+            i += 1
+
+    def _parse_community_sets(self, lines):
+        """Parse community-set definitions"""
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith('community-set '):
+                community_name = line.split()[1]
+                communities = []
+                i += 1
+                while i < len(lines):
+                    line = lines[i].strip()
+                    if line == 'end-set':
+                        break
+                    if line and not line.startswith('!'):
+                        # Remove trailing comma
+                        community = line.rstrip(',').strip()
+                        if community:
+                            communities.append(community)
+                    i += 1
+                self.bgp_config['communitySets'].append({
+                    'name': community_name,
+                    'communities': communities
+                })
+                pass  # Removed detailed logging
+            i += 1
+
+    def _parse_as_path_sets(self, lines):
+        """Parse as-path-set definitions"""
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith('as-path-set '):
+                aspath_name = line.split()[1]
+                paths = []
+                i += 1
+                while i < len(lines):
+                    line = lines[i].strip()
+                    if line == 'end-set':
+                        break
+                    if line and not line.startswith('!'):
+                        # Remove trailing comma
+                        path = line.rstrip(',').strip()
+                        if path:
+                            paths.append(path)
+                    i += 1
+                self.bgp_config['asPathSets'].append({
+                    'name': aspath_name,
+                    'paths': paths
+                })
+                pass  # Removed detailed logging
+            i += 1
+
+    def _parse_extcommunity_sets(self, lines):
+        """Parse extcommunity-set definitions"""
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith('extcommunity-set '):
+                extcomm_name = line.split()[1]
+                communities = []
+                i += 1
+                while i < len(lines):
+                    line = lines[i].strip()
+                    if line == 'end-set':
+                        break
+                    if line and not line.startswith('!'):
+                        # Remove trailing comma
+                        community = line.rstrip(',').strip()
+                        if community:
+                            communities.append(community)
+                    i += 1
+                self.bgp_config['extcommunitySets'].append({
+                    'name': extcomm_name,
+                    'communities': communities
+                })
+                pass  # Removed detailed logging
+            i += 1
+
+    def _parse_route_policies(self, lines):
+        """Parse route-policy definitions"""
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith('route-policy '):
+                policy_name = line.split()[1]
+                policy_lines = []
+                prefix_sets = set()
+                community_sets = set()
+                as_path_sets = set()
+                i += 1
+
+                while i < len(lines):
+                    original_line = lines[i].rstrip()  # Keep original indentation, just remove trailing whitespace
+                    line = original_line.strip()  # Use stripped version for logic checks
+                    if line == 'end-policy':
+                        break
+                    if line and not line.startswith('!'):
+                        policy_lines.append(original_line)  # Store with original indentation
+                        # Find prefix-set references
+                        prefix_matches = re.findall(r'PREFIX_\w+', line)
+                        for match in prefix_matches:
+                            prefix_sets.add(match)
+                        # Find community-set references
+                        comm_matches = re.findall(r'COMM_\w+', line)
+                        for match in comm_matches:
+                            community_sets.add(match)
+                        # Find as-path-set references
+                        aspath_matches = re.findall(r'AS_PATH_\w+', line)
+                        for match in aspath_matches:
+                            as_path_sets.add(match)
+                    i += 1
+
+                self.bgp_config['routePolicies'].append({
+                    'name': policy_name,
+                    'lines': policy_lines,
+                    'prefixSets': list(prefix_sets),
+                    'communitySets': list(community_sets),
+                    'asPathSets': list(as_path_sets)
+                })
+                pass  # Removed detailed logging
+            i += 1
+
+    def _parse_bgp_section(self, lines):
+        """Parse the main BGP configuration section"""
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if line.startswith('router bgp '):
+                self.bgp_config['asNumber'] = line.split()[2]
+                pass  # Removed detailed logging
+                i = self._parse_bgp_block(lines, i + 1)
+                break
+            i += 1
+
+    def _parse_bgp_block(self, lines, start_idx):
+        """Parse the BGP configuration block"""
+        i = start_idx
+        current_vrf = None
+
+        while i < len(lines):
+            original_line = lines[i]
+
+            # Check if we've reached the end of BGP block
+            if not original_line.startswith(' ') and not original_line.startswith('!') and original_line.strip():
+                break
+
+            line = original_line.strip()
+
+            if line.startswith('bgp router-id '):
+                self.bgp_config['routerId'] = line.split()[-1]
+                pass  # Removed detailed logging
+
+            elif line.startswith('neighbor-group '):
+                group_name = line.split()[1]
+                i = self._parse_neighbor_group(lines, i, group_name)
+                continue
+
+            elif line.startswith('vrf ') and original_line.startswith(' vrf '):
+                vrf_name = line.split()[1]
+                pass  # Removed detailed logging
+                current_vrf = {'name': vrf_name, 'rd': '', 'neighbors': []}
+                i = self._parse_vrf_block(lines, i + 1, current_vrf)
+                self.bgp_config['vrfs'].append(current_vrf)
+                current_vrf = None
+                continue
+
+            elif line.startswith('neighbor ') and not 'neighbor-group' in line and original_line.startswith(' neighbor '):
+                neighbor_ip = line.split()[1]
+                pass  # Removed detailed logging
+                neighbor = {'ip': neighbor_ip, 'remoteAs': '', 'description': '', 'configs': []}
+                i = self._parse_neighbor_block(lines, i, neighbor, is_global=True)
+                self.bgp_config['globalNeighbors'].append(neighbor)
+                continue
+
+            i += 1
+
+        return i
+
+    def _parse_neighbor_group(self, lines, start_idx, group_name):
+        """Parse neighbor-group configuration"""
+        i = start_idx + 1
+        group = {'name': group_name, 'remoteAs': '', 'description': '', 'configs': [], 'inRoutePolicy': None, 'outRoutePolicy': None}
+
+        while i < len(lines):
+            original_line = lines[i].rstrip()  # Keep original indentation, just remove trailing whitespace
+
+            # Check for proper indentation (neighbor-group content should have 2+ spaces)
+            if not original_line.startswith('  ') and not original_line.startswith('!') and original_line.strip():
+                break
+
+            line = original_line.strip()  # Use stripped version for logic checks
+            if line.startswith('remote-as '):
+                group['remoteAs'] = line.split()[-1]
+            elif line.startswith('description '):
+                # Handle quoted descriptions
+                if '"' in line:
+                    group['description'] = line.split('"')[1]
+                else:
+                    group['description'] = ' '.join(line.split()[1:])
+            elif 'route-policy ' in line and ' in' in line:
+                group['inRoutePolicy'] = line.split('route-policy ')[1].split(' in')[0]
+            elif 'route-policy ' in line and ' out' in line:
+                group['outRoutePolicy'] = line.split('route-policy ')[1].split(' out')[0]
+            elif line.startswith('default-originate route-policy '):
+                group['defaultOriginatePolicy'] = line.split('default-originate route-policy ')[1].strip()
+
+            if line:
+                group['configs'].append(original_line)  # Store with original indentation
+            i += 1
+
+        self.bgp_config['neighborGroups'].append(group)
+        pass  # Removed detailed logging
+        return i - 1
+
+    def _parse_vrf_block(self, lines, start_idx, vrf):
+        """Parse VRF configuration block"""
+        i = start_idx
+
+        while i < len(lines):
+            original_line = lines[i]
+
+            # VRF content should have 2+ spaces, or be a comment, or be end of VRF (single space + not vrf)
+            if (not original_line.startswith('  ') and
+                not original_line.startswith('!') and
+                original_line.strip() and
+                not original_line.startswith(' !')):
+                # Check if this is the start of another VRF or end of BGP block
+                if original_line.startswith(' vrf ') or not original_line.startswith(' '):
+                    break
+
+            line = original_line.strip()
+
+            if line.startswith('rd '):
+                vrf['rd'] = line.split()[-1]
+                print(f"VRF {vrf['name']} RD: {vrf['rd']}")
+
+            elif line.startswith('neighbor ') and original_line.startswith('  neighbor '):
+                neighbor_ip = line.split()[1]
+                pass  # Removed detailed logging
+                neighbor = {'ip': neighbor_ip, 'remoteAs': '', 'description': '', 'configs': [], 'vrf': vrf['name']}
+                i = self._parse_neighbor_block(lines, i, neighbor, is_global=False)
+                vrf['neighbors'].append(neighbor)
+                continue
+
+            i += 1
+
+        return i - 1
+
+    def _parse_neighbor_block(self, lines, start_idx, neighbor, is_global=True):
+        """Parse individual neighbor configuration"""
+        i = start_idx + 1
+        min_indent = 2 if is_global else 3  # Global neighbors have 2+ spaces, VRF neighbors have 3+ spaces
+
+        while i < len(lines):
+            original_line = lines[i]
+
+            # Stop if we hit a line that doesn't belong to this neighbor
+            if (not original_line.startswith(' ' * min_indent) and
+                not original_line.startswith('!') and
+                original_line.strip()):
+                # Check if this is another neighbor, VRF, or end of BGP section
+                stripped = original_line.strip()
+                if (stripped.startswith('neighbor ') or
+                    stripped.startswith('vrf ') or
+                    not original_line.startswith(' ')):
+                    break
+
+            line = original_line.strip()
+
+            if line.startswith('remote-as '):
+                neighbor['remoteAs'] = line.split()[-1]
+            elif line.startswith('use neighbor-group '):
+                neighbor['neighborGroup'] = line.split()[-1]
+            elif line.startswith('description '):
+                if '"' in line:
+                    neighbor['description'] = line.split('"')[1]
+                else:
+                    neighbor['description'] = ' '.join(line.split()[1:])
+            elif 'route-policy ' in line and ' in' in line:
+                neighbor['inRoutePolicy'] = line.split('route-policy ')[1].split(' in')[0]
+            elif 'route-policy ' in line and ' out' in line:
+                neighbor['outRoutePolicy'] = line.split('route-policy ')[1].split(' out')[0]
+            elif line.startswith('default-originate route-policy '):
+                neighbor['defaultOriginatePolicy'] = line.split('default-originate route-policy ')[1].strip()
+
+            if line:
+                neighbor['configs'].append(line)
+            i += 1
+
+        return i - 1
+
+class BGPWebHandler(http.server.BaseHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        self.parser = BGPParser()
+        super().__init__(*args, **kwargs)
+
+    def do_GET(self):
+        """Handle GET requests"""
+        if self.path == '/' or self.path == '/index.html':
+            self._serve_main_page()
+        elif self.path == '/api/config':
+            self._serve_config_api()
+        elif self.path.startswith('/static/'):
+            self._serve_static_file()
+        else:
+            self._send_404()
+
+    def do_POST(self):
+        """Handle POST requests"""
+        if self.path == '/upload':
+            self._handle_file_upload()
+        elif self.path == '/generate':
+            self._handle_config_generation()
+        else:
+            self._send_404()
+
+    def _serve_main_page(self):
+        """Serve the main HTML page"""
+        html_content = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BGP Configuration Viewer</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header { text-align: center; margin-bottom: 30px; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 8px; }
+        .file-input { margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 5px; border: 2px dashed #dee2e6; }
+        .tree { font-family: 'Courier New', monospace; }
+        .tree-item { margin: 5px 0; padding: 8px; border-radius: 4px; cursor: pointer; transition: background-color 0.2s; }
+        .tree-item:hover { background-color: #e9ecef; }
+        .tree-item.selected { background-color: #007bff; color: white; }
+        .tree-item.bgp-root { background-color: #28a745; color: white; font-weight: bold; font-size: 16px; }
+        .tree-item.vrf-item { background-color: #17a2b8; color: white; margin-left: 20px; font-weight: bold; }
+        .tree-item.neighbor-item { margin-left: 40px; background-color: #ffc107; border-left: 3px solid #fd7e14; }
+        .tree-item.neighbor-group-item { margin-left: 20px; background-color: #6c757d; color: white; }
+        .tree-children { margin-left: 20px; max-height: 0; overflow: hidden; transition: max-height 0.3s ease; }
+        .tree-children.expanded { max-height: none; }
+        .expand-icon { display: inline-block; width: 20px; margin-right: 5px; font-weight: bold; }
+        .controls { margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 5px; }
+        .button { background: #007bff; color: white; border: none; padding: 10px 20px; margin: 5px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .button:hover { background: #0056b3; }
+        .button.success { background: #28a745; }
+        .button.success:hover { background: #1e7e34; }
+        .details-panel { display: none; margin-top: 20px; padding: 20px; background: #f8f9fa; border-radius: 5px; border: 1px solid #dee2e6; }
+        .route-policy { background: white; padding: 15px; margin: 10px 0; border-radius: 5px; border: 1px solid #dee2e6; }
+        .route-policy h4 { color: #495057; margin-top: 0; }
+        .policy-line { font-family: 'Courier New', monospace; padding: 5px 10px; margin: 2px 0; background: #f8f9fa; border-left: 3px solid #dee2e6; cursor: pointer; transition: all 0.2s; }
+        .policy-line:hover { background: #e9ecef; border-left-color: #007bff; }
+        .policy-line.selected { background: #cce5ff; border-left-color: #007bff; }
+        .stats { display: flex; justify-content: space-around; margin: 20px 0; padding: 15px; background: #e9ecef; border-radius: 5px; }
+        .stat-item { text-align: center; }
+        .stat-number { font-size: 24px; font-weight: bold; color: #495057; }
+        .stat-label { font-size: 12px; color: #6c757d; }
+        .selected-items { background: #fff3cd; padding: 10px; margin: 10px 0; border-radius: 5px; border: 1px solid #ffeaa7; display: none; }
+        .config-output { background: #2d3748; color: #e2e8f0; padding: 20px; border-radius: 5px; font-family: 'Courier New', monospace; font-size: 12px; white-space: pre-wrap; max-height: 400px; overflow-y: auto; }
+        .original-config { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 10px; margin: 5px 0; font-family: 'Courier New', monospace; }
+        .config-line { font-family: 'Courier New', monospace; font-size: 12px; margin: 1px 0; padding: 2px; white-space: pre; position: relative; }
+        .config-line label { position: absolute; right: 5px; top: 2px; }
+        .config-line input[type="checkbox"] { margin: 0; }
+        .config-line:hover { background-color: #e9ecef; }
+        .prefix-details { background: #fff; border-left: 3px solid #007bff; margin: 10px 0; padding: 10px; }
+        .hidden { display: none; }
+        .loading { text-align: center; padding: 40px; color: #6c757d; }
+        .error { color: #dc3545; background: #f8d7da; padding: 10px; border-radius: 5px; margin: 10px 0; }
+        .success { color: #155724; background: #d4edda; padding: 10px; border-radius: 5px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌐 BGP Configuration Viewer</h1>
+            <p>Cisco IOS-XR BGP Configuration Analysis Tool</p>
+        </div>
+
+        <div class="file-input">
+            <h3>📁 Load Configuration File</h3>
+            <form id="uploadForm" enctype="multipart/form-data">
+                <input type="file" id="configFile" name="configFile" accept=".log,.txt,.cfg" required />
+                <button type="submit" class="button">Upload & Parse</button>
+            </form>
+            <p style="margin: 10px 0 0 0; font-size: 14px; color: #6c757d;">
+                Select your Cisco IOS-XR configuration file (config.log)
+            </p>
+            <div id="uploadStatus"></div>
+        </div>
+
+        <div id="configContent" class="hidden">
+            <div class="stats">
+                <div class="stat-item">
+                    <div class="stat-number" id="bgpAsNumber">-</div>
+                    <div class="stat-label">BGP AS</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="totalNeighbors">0</div>
+                    <div class="stat-label">Total Neighbors</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="totalVrfs">0</div>
+                    <div class="stat-label">VRFs</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="totalPolicies">0</div>
+                    <div class="stat-label">Route Policies</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="totalCommunitySets">0</div>
+                    <div class="stat-label">Community Sets</div>
+                </div>
+            </div>
+
+            <div class="controls">
+                <button class="button" onclick="expandAll()">📂 Expand All</button>
+                <button class="button" onclick="collapseAll()">📁 Collapse All</button>
+                <button class="button" onclick="clearSelection()">🗑️ Clear Selection</button>
+                <button class="button success" onclick="showSelectedDetails()">👁️ View Selected</button>
+                <button class="button success" onclick="generateConfig()">💾 Generate Config</button>
+            </div>
+            <div class="selected-items" id="selectedItems">
+                <h4>📋 Selected Items:</h4>
+                <div id="selectedItemsList"></div>
+            </div>
+
+            <div class="tree" id="bgpTree"></div>
+
+            <div class="details-panel" id="detailsPanel">
+                <h3>📊 Selected Neighbors Details</h3>
+                <div id="detailsContent"></div>
+            </div>
+
+            <div class="details-panel" id="configPanel">
+                <h3>⚙️ Generated Configuration</h3>
+                <button class="button" onclick="downloadConfig()">💾 Download Config</button>
+                <div class="config-output" id="configOutput"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let bgpConfig = {};
+        let selectedNeighbors = new Set();
+        let selectedPolicies = new Set();
+        let selectedPrefixSets = new Set();
+        let selectedCommunitySets = new Set();
+        let selectedPolicyLines = new Set();
+
+        // Form handling
+        document.getElementById('uploadForm').addEventListener('submit', handleUpload);
+
+        async function handleUpload(event) {
+            event.preventDefault();
+
+            const formData = new FormData();
+            const fileInput = document.getElementById('configFile');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                showStatus('Please select a file', 'error');
+                return;
+            }
+
+            formData.append('configFile', file);
+            showStatus('Uploading and parsing configuration...', 'loading');
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    if (result.success) {
+                        bgpConfig = result.config;
+                        displayConfig();
+                        showStatus('Configuration loaded successfully!', 'success');
+                        document.getElementById('configContent').classList.remove('hidden');
+                    } else {
+                        showStatus('Error: ' + result.error, 'error');
+                    }
+                } else {
+                    showStatus('Upload failed: ' + response.statusText, 'error');
+                }
+            } catch (error) {
+                showStatus('Error: ' + error.message, 'error');
+            }
+        }
+
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('uploadStatus');
+            statusDiv.innerHTML = `<div class="${type}">${message}</div>`;
+            if (type === 'loading') {
+                statusDiv.innerHTML = `<div class="loading">${message}</div>`;
+            }
+        }
+
+        function displayConfig() {
+            document.getElementById('bgpAsNumber').textContent = bgpConfig.asNumber;
+            document.getElementById('totalNeighbors').textContent =
+                bgpConfig.globalNeighbors.length + bgpConfig.vrfs.reduce((sum, vrf) => sum + vrf.neighbors.length, 0);
+            document.getElementById('totalVrfs').textContent = bgpConfig.vrfs.length;
+            document.getElementById('totalPolicies').textContent = bgpConfig.routePolicies.length;
+            document.getElementById('totalCommunitySets').textContent = bgpConfig.communitySets.length;
+
+            const tree = document.getElementById('bgpTree');
+            tree.innerHTML = '';
+
+            // BGP Root
+            const bgpRoot = createTreeItem(
+                `🌐 BGP AS ${bgpConfig.asNumber} (Router-ID: ${bgpConfig.routerId})`,
+                'bgp-root', true
+            );
+            tree.appendChild(bgpRoot);
+
+            const bgpChildren = document.createElement('div');
+            bgpChildren.className = 'tree-children expanded';
+            bgpRoot.appendChild(bgpChildren);
+
+            // Global neighbors
+            if (bgpConfig.globalNeighbors.length > 0) {
+                const globalSection = createTreeItem(
+                    `🌍 Global Neighbors (${bgpConfig.globalNeighbors.length})`,
+                    'vrf-item', true
+                );
+                bgpChildren.appendChild(globalSection);
+
+                const globalChildren = document.createElement('div');
+                globalChildren.className = 'tree-children expanded';
+                globalSection.appendChild(globalChildren);
+
+                bgpConfig.globalNeighbors.forEach(neighbor => {
+                    const neighborItem = createTreeItem(
+                        `👥 ${neighbor.ip} (AS ${neighbor.remoteAs}) - ${neighbor.description}`,
+                        'neighbor-item', false,
+                        () => toggleNeighborSelection(neighbor.ip, 'Global')
+                    );
+                    globalChildren.appendChild(neighborItem);
+                });
+            }
+
+            // VRF neighbors
+            bgpConfig.vrfs.forEach(vrf => {
+                const vrfItem = createTreeItem(
+                    `📁 VRF ${vrf.name} (${vrf.neighbors.length} neighbors)`,
+                    'vrf-item', true
+                );
+                bgpChildren.appendChild(vrfItem);
+
+                const vrfChildren = document.createElement('div');
+                vrfChildren.className = 'tree-children';
+                vrfItem.appendChild(vrfChildren);
+
+                vrf.neighbors.forEach(neighbor => {
+                    const neighborItem = createTreeItem(
+                        `👥 ${neighbor.ip} (AS ${neighbor.remoteAs}) - ${neighbor.description}`,
+                        'neighbor-item', false,
+                        () => toggleNeighborSelection(neighbor.ip, vrf.name)
+                    );
+                    vrfChildren.appendChild(neighborItem);
+                });
+            });
+        }
+
+        function createTreeItem(text, className, expandable, clickHandler) {
+            const item = document.createElement('div');
+            item.className = `tree-item ${className}`;
+
+            const icon = document.createElement('span');
+            icon.className = 'expand-icon';
+
+            if (expandable) {
+                icon.textContent = '▶';
+                item.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    toggleExpand(item);
+                });
+            } else {
+                icon.textContent = '•';
+                if (clickHandler) {
+                    item.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        clickHandler();
+                        updateSelectedDisplay();
+                    });
+                }
+            }
+
+            const textSpan = document.createElement('span');
+            textSpan.textContent = text;
+
+            item.appendChild(icon);
+            item.appendChild(textSpan);
+
+            return item;
+        }
+
+        function toggleExpand(item) {
+            const children = item.querySelector('.tree-children');
+            if (children) {
+                const icon = item.querySelector('.expand-icon');
+                if (children.classList.contains('expanded')) {
+                    children.classList.remove('expanded');
+                    icon.textContent = '▶';
+                } else {
+                    children.classList.add('expanded');
+                    icon.textContent = '▼';
+                }
+            }
+        }
+
+        function toggleNeighborSelection(neighborIp, context) {
+            const key = `${neighborIp}@${context}`;
+            const item = event.target.closest('.tree-item');
+
+            if (selectedNeighbors.has(key)) {
+                selectedNeighbors.delete(key);
+                item.classList.remove('selected');
+            } else {
+                selectedNeighbors.add(key);
+                item.classList.add('selected');
+            }
+        }
+
+        function togglePolicySelection(policyName) {
+            const item = event.target.closest('.tree-item');
+
+            if (selectedPolicies.has(policyName)) {
+                selectedPolicies.delete(policyName);
+                item.classList.remove('selected');
+            } else {
+                selectedPolicies.add(policyName);
+                item.classList.add('selected');
+            }
+        }
+
+        function toggleCommunitySetSelection(communitySetName) {
+            const item = event.target.closest('.tree-item');
+
+            if (selectedCommunitySets.has(communitySetName)) {
+                selectedCommunitySets.delete(communitySetName);
+                item.classList.remove('selected');
+            } else {
+                selectedCommunitySets.add(communitySetName);
+                item.classList.add('selected');
+            }
+        }
+
+        function updateSelectedDisplay() {
+            const selectedDiv = document.getElementById('selectedItems');
+            const listDiv = document.getElementById('selectedItemsList');
+
+            if (selectedNeighbors.size === 0 && selectedPolicies.size === 0 && selectedCommunitySets.size === 0) {
+                selectedDiv.style.display = 'none';
+                return;
+            }
+
+            selectedDiv.style.display = 'block';
+            let html = '';
+
+            if (selectedNeighbors.size > 0) {
+                html += '<strong>Neighbors:</strong> ' + Array.from(selectedNeighbors).join(', ') + '<br>';
+            }
+
+            if (selectedPolicies.size > 0) {
+                html += '<strong>Policies:</strong> ' + Array.from(selectedPolicies).join(', ') + '<br>';
+            }
+
+            if (selectedCommunitySets.size > 0) {
+                html += '<strong>Community Sets:</strong> ' + Array.from(selectedCommunitySets).join(', ');
+            }
+
+            listDiv.innerHTML = html;
+        }
+
+        // Control functions
+        function expandAll() {
+            document.querySelectorAll('.tree-children').forEach(child => {
+                child.classList.add('expanded');
+            });
+            document.querySelectorAll('.expand-icon').forEach(icon => {
+                if (icon.textContent === '▶') icon.textContent = '▼';
+            });
+        }
+
+        function collapseAll() {
+            document.querySelectorAll('.tree-children').forEach((child, index) => {
+                if (index > 0) child.classList.remove('expanded');
+            });
+            document.querySelectorAll('.expand-icon').forEach((icon, index) => {
+                if (index > 0 && icon.textContent === '▼') icon.textContent = '▶';
+            });
+        }
+
+        function clearSelection() {
+            selectedNeighbors.clear();
+            selectedPolicies.clear();
+            selectedPrefixSets.clear();
+            selectedCommunitySets.clear();
+            document.querySelectorAll('.tree-item.selected').forEach(item => {
+                item.classList.remove('selected');
+            });
+            updateSelectedDisplay();
+            document.getElementById('detailsPanel').style.display = 'none';
+            document.getElementById('configPanel').style.display = 'none';
+        }
+
+        function showSelectedDetails() {
+            if (selectedNeighbors.size === 0) {
+                alert('Please select at least one neighbor to view details.');
+                return;
+            }
+
+            const detailsPanel = document.getElementById('detailsPanel');
+            const detailsContent = document.getElementById('detailsContent');
+
+            let html = '<h3>🔍 Detailed Configuration Analysis</h3>';
+
+            selectedNeighbors.forEach(neighborKey => {
+                const [neighborIp, context] = neighborKey.split('@');
+                let neighbor = null;
+
+                if (context === 'Global') {
+                    neighbor = bgpConfig.globalNeighbors.find(n => n.ip === neighborIp);
+                } else {
+                    const vrf = bgpConfig.vrfs.find(v => v.name === context);
+                    if (vrf) neighbor = vrf.neighbors.find(n => n.ip === neighborIp);
+                }
+
+                if (neighbor) {
+                    html += `<div class="route-policy">
+                        <h4>🔗 ${neighbor.ip} (${context})</h4>`;
+
+                    // Auto-show original neighbor configuration (no extra checkbox needed)
+                    html += `<div><strong>📄 Original Configuration:</strong>
+                        <div class="original-config">`;
+
+                    // Display original format with checkboxes ONLY on expandable lines
+                    const neighborIndent = context !== 'Global' ? '  ' : ' ';
+                    html += `<div class="config-line">${neighborIndent}neighbor ${neighborIp}</div>`;
+                    html += `<div class="config-line">${neighborIndent} remote-as ${neighbor.remoteAs}</div>`;
+
+                    if (neighbor.neighborGroup) {
+                        html += `<div class="config-line">${neighborIndent} use neighbor-group ${neighbor.neighborGroup}<label><input type="checkbox" onchange="expandNeighborGroup('${neighbor.neighborGroup}', '${neighborIp}', '${context}', this.checked)"></label></div>`;
+                    }
+
+                    html += `<div class="config-line">${neighborIndent} description "${neighbor.description}"</div>`;
+                    html += `<div class="config-line">${neighborIndent} address-family ipv4 unicast</div>`;
+
+                    if (neighbor.inRoutePolicy && !neighbor.neighborGroup) {
+                        html += `<div class="config-line">${neighborIndent}  route-policy ${neighbor.inRoutePolicy} in<label><input type="checkbox" onchange="expandRoutePolicy('${neighbor.inRoutePolicy}', 'in', '${neighborIp}', this.checked)"></label></div>`;
+                    }
+                    if (neighbor.outRoutePolicy && !neighbor.neighborGroup) {
+                        html += `<div class="config-line">${neighborIndent}  route-policy ${neighbor.outRoutePolicy} out<label><input type="checkbox" onchange="expandRoutePolicy('${neighbor.outRoutePolicy}', 'out', '${neighborIp}', this.checked)"></label></div>`;
+                    }
+
+                    html += `<div class="config-line">${neighborIndent} !</div>`; // No checkbox for structural !
+                    html += `</div></div>`;
+
+                    // Add expansion containers AFTER the neighbor block
+                    if (neighbor.neighborGroup) {
+                        html += `<div id="neighborgroup_${neighbor.neighborGroup}_${neighborIp}" style="display: none;"></div>`;
+                    }
+                    if (neighbor.inRoutePolicy && !neighbor.neighborGroup) {
+                        html += `<div id="routepolicy_${neighbor.inRoutePolicy}_in_${neighborIp}" style="display: none;"></div>`;
+                    }
+                    if (neighbor.outRoutePolicy && !neighbor.neighborGroup) {
+                        html += `<div id="routepolicy_${neighbor.outRoutePolicy}_out_${neighborIp}" style="display: none;"></div>`;
+                    }
+
+                    // Layer-by-layer expansion is now handled by the checkboxes in the config above
+
+                    html += '</div>';
+                }
+            });
+
+            detailsContent.innerHTML = html;
+            detailsPanel.style.display = 'block';
+            detailsPanel.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // Layer-by-layer expansion functions
+        function expandNeighborGroup(groupName, neighborIp, context, show) {
+            const containerId = `neighborgroup_${groupName}_${neighborIp}`;
+            const container = document.getElementById(containerId);
+            if (!container) return;
+
+            if (show) {
+                const neighborGroup = bgpConfig.neighborGroups.find(ng => ng.name === groupName);
+                if (neighborGroup) {
+                    let html = `<div class="original-config">
+                        <div class="config-line"> neighbor-group ${groupName}</div>
+                        <div class="config-line">  remote-as ${neighborGroup.remoteAs}</div>`;
+
+                    neighborGroup.configs.forEach(line => {
+                        const originalLine = line; // Preserve original indentation
+                        const trimmedLine = line.trim();
+                        if (trimmedLine && trimmedLine !== '!' && !trimmedLine.startsWith('remote-as')) {
+                            if (trimmedLine.includes('route-policy') && trimmedLine.includes(' in')) {
+                                const policyName = trimmedLine.split('route-policy ')[1].split(' in')[0];
+                                html += `<div class="config-line">${originalLine}<label><input type="checkbox" onchange="expandRoutePolicy('${policyName}', 'in', '${neighborIp}_group', this.checked)"></label></div>`;
+                            } else if (trimmedLine.includes('route-policy') && trimmedLine.includes(' out')) {
+                                const policyName = trimmedLine.split('route-policy ')[1].split(' out')[0];
+                                html += `<div class="config-line">${originalLine}<label><input type="checkbox" onchange="expandRoutePolicy('${policyName}', 'out', '${neighborIp}_group', this.checked)"></label></div>`;
+                            } else if (trimmedLine.includes('default-originate route-policy ')) {
+                                const policyName = trimmedLine.split('default-originate route-policy ')[1].trim();
+                                html += `<div class="config-line">${originalLine}<label><input type="checkbox" onchange="expandRoutePolicy('${policyName}', 'default', '${neighborIp}_group', this.checked)"></label></div>`;
+                            } else {
+                                // Regular neighbor-group lines (no checkbox for non-expandable lines)
+                                html += `<div class="config-line">${originalLine}</div>`;
+                            }
+                        }
+                    });
+                    html += `<div class="config-line"> !</div></div>`; // No checkbox for structural !
+
+                    // Add expansion containers for route policies BELOW the neighbor-group block
+                    neighborGroup.configs.forEach(line => {
+                        const trimmedLine = line.trim();
+                        if (trimmedLine.includes('route-policy') && trimmedLine.includes(' in')) {
+                            const policyName = trimmedLine.split('route-policy ')[1].split(' in')[0];
+                            html += `<div id="routepolicy_${policyName}_in_${neighborIp}_group" style="display: none;"></div>`;
+                        } else if (trimmedLine.includes('route-policy') && trimmedLine.includes(' out')) {
+                            const policyName = trimmedLine.split('route-policy ')[1].split(' out')[0];
+                            html += `<div id="routepolicy_${policyName}_out_${neighborIp}_group" style="display: none;"></div>`;
+                        } else if (trimmedLine.includes('default-originate route-policy ')) {
+                            const policyName = trimmedLine.split('default-originate route-policy ')[1].trim();
+                            html += `<div id="routepolicy_${policyName}_default_${neighborIp}_group" style="display: none;"></div>`;
+                        }
+                    });
+
+                    container.innerHTML = html;
+                }
+                container.style.display = 'block';
+            } else {
+                container.style.display = 'none';
+            }
+        }
+
+        function expandRoutePolicy(policyName, direction, neighborId, show) {
+            const containerId = `routepolicy_${policyName}_${direction}_${neighborId}`;
+            const container = document.getElementById(containerId);
+            if (!container) return;
+
+            if (show) {
+                const policy = bgpConfig.routePolicies.find(p => p.name === policyName);
+                if (policy) {
+
+                    let html = `<div class="original-config">
+                        <div class="config-line"> route-policy ${policyName}</div>`;
+
+                    policy.lines.forEach((line, index) => {
+                        const originalLine = line;
+                        const trimmedLine = line.trim();
+
+                        // Only add checkboxes to expandable lines
+                        if (trimmedLine === 'pass' || trimmedLine === 'else' || trimmedLine === 'endif') {
+                            html += `<div class="config-line">${originalLine}</div>`;
+                        }
+                        else if (trimmedLine.startsWith('if ') || trimmedLine.startsWith('elseif ')) {
+                            // if/elseif lines with references get checkboxes for individual expansion
+                            const prefixMatch = trimmedLine.match(/\\b(PREFIX_[A-Z0-9_]+)\\b/);
+                            const commMatch = trimmedLine.match(/\\b(COMM_[A-Z0-9_]+)\\b/);
+                            const asPathMatch = trimmedLine.match(/\\b(AS_PATH[A-Z0-9_]*)\\b/);
+
+                            if (prefixMatch || commMatch || asPathMatch) {
+                                html += `<div class="config-line">${originalLine}<label><input type="checkbox" onchange="expandPolicyLineReferences('${policyName}', ${index}, '${neighborId}', this.checked)"></label></div>`;
+                            } else {
+                                html += `<div class="config-line">${originalLine}</div>`;
+                            }
+                        }
+                        else if (trimmedLine.includes('set community ') && /\\b(COMM_[A-Z0-9_]+)\\b/.test(trimmedLine)) {
+                            const commMatch = trimmedLine.match(/\\b(COMM_[A-Z0-9_]+)\\b/);
+                            if (commMatch) {
+                                html += `<div class="config-line">${originalLine}<label><input type="checkbox" onchange="expandCommunitySet('${commMatch[1]}', '${policyName}_${neighborId}_${index}', this.checked)"></label></div>`;
+                            }
+                        }
+                        else if (trimmedLine.includes('destination in ') || trimmedLine.includes('source in ')) {
+                            const prefixMatch = trimmedLine.match(/\\b(PREFIX_[A-Z0-9_]+)\\b/);
+                            if (prefixMatch) {
+                                html += `<div class="config-line">${originalLine}<label><input type="checkbox" onchange="expandPrefixSet('${prefixMatch[1]}', '${policyName}_${neighborId}_${index}', this.checked)"></label></div>`;
+                            } else {
+                                html += `<div class="config-line">${originalLine}</div>`;
+                            }
+                        }
+                        else if (trimmedLine.includes('as-path in ')) {
+                            const asPathMatch = trimmedLine.match(/\\b(AS_PATH[A-Z0-9_]*)\\b/);
+                            if (asPathMatch) {
+                                html += `<div class="config-line">${originalLine}<label><input type="checkbox" onchange="expandAsPathSet('${asPathMatch[1]}', '${policyName}_${neighborId}_${index}', this.checked)"></label></div>`;
+                            } else {
+                                html += `<div class="config-line">${originalLine}</div>`;
+                            }
+                        }
+                        else if (trimmedLine.startsWith('set ') || trimmedLine.startsWith('default-originate')) {
+                            // Other set commands and default-originate - show without checkbox for now
+                            html += `<div class="config-line">${originalLine}</div>`;
+                        }
+                        else {
+                            // Regular policy lines - no checkboxes
+                            html += `<div class="config-line">${originalLine}</div>`;
+                        }
+                    });
+                    html += `<div class="config-line"> end-policy</div></div>`;
+
+                    // Add expansion containers for all referenced sets BELOW the route-policy block
+                    const addedSets = new Set();
+                    policy.lines.forEach((line, index) => {
+                        const trimmedLine = line.trim();
+
+                        // Add containers for prefix-sets
+                        const prefixMatches = line.match(/\\b(PREFIX_[A-Z0-9_]+)\\b/g) || [];
+                        prefixMatches.forEach(prefixName => {
+                            const setId = `prefixset_${prefixName}_${policyName}_${neighborId}_${index}`;
+                            if (!addedSets.has(setId)) {
+                                addedSets.add(setId);
+                                html += `<div id="${setId}" style="display: none;"></div>`;
+                            }
+                        });
+
+                        // Add containers for community-sets
+                        const commMatches = line.match(/\\b(COMM_[A-Z0-9_]+)\\b/g) || [];
+                        commMatches.forEach(commName => {
+                            const setId = `communityset_${commName}_${policyName}_${neighborId}_${index}`;
+                            if (!addedSets.has(setId)) {
+                                addedSets.add(setId);
+                                html += `<div id="${setId}" style="display: none;"></div>`;
+                            }
+                        });
+
+                        // Add containers for as-path-sets
+                        const asPathMatches = line.match(/\\b(AS_PATH[A-Z0-9_]*)\\b/g) || [];
+                        asPathMatches.forEach(asPathName => {
+                            const setId = `aspathset_${asPathName}_${policyName}_${neighborId}_${index}`;
+                            if (!addedSets.has(setId)) {
+                                addedSets.add(setId);
+                                html += `<div id="${setId}" style="display: none;"></div>`;
+                            }
+                        });
+
+                        // Add container for policy line references (for if/elseif that reference multiple sets)
+                        html += `<div id="policylineref_${policyName}_${index}_${neighborId}" style="display: none;"></div>`;
+                    });
+
+                    container.innerHTML = html;
+                }
+                container.style.display = 'block';
+            } else {
+                container.style.display = 'none';
+            }
+        }
+
+        function expandPolicyLineReferences(policyName, lineIndex, neighborId, show) {
+            const containerId = `policylineref_${policyName}_${lineIndex}_${neighborId}`;
+            const container = document.getElementById(containerId);
+            if (!container) return;
+
+            if (show) {
+                const policy = bgpConfig.routePolicies.find(p => p.name === policyName);
+                if (policy && policy.lines[lineIndex]) {
+                    const line = policy.lines[lineIndex];
+                    let html = '';
+
+                    // Check for prefix-set references and show them below the policy
+                    const prefixMatches = line.match(/\\b(PREFIX_[A-Z0-9_]+)\\b/g) || [];
+                    prefixMatches.forEach(prefixName => {
+                        const prefixSet = bgpConfig.prefixSets[prefixName];
+                        if (prefixSet) {
+                            html += `<div class="original-config">
+                                <div class="config-line"> prefix-set ${prefixName}</div>`;
+                            prefixSet.forEach(prefix => {
+                                html += `<div class="config-line">  ${prefix}</div>`;
+                            });
+                            html += `<div class="config-line"> end-set</div></div>`;
+                        }
+                    });
+
+                    // Check for community-set references and show them below the policy
+                    const commMatches = line.match(/\\b(COMM_[A-Z0-9_]+)\\b/g) || [];
+                    commMatches.forEach(commName => {
+                        const commSet = bgpConfig.communitySets.find(cs => cs.name === commName);
+                        if (commSet) {
+                            html += `<div class="original-config">
+                                <div class="config-line"> community-set ${commName}</div>`;
+                            commSet.communities.forEach(community => {
+                                html += `<div class="config-line">  ${community}</div>`;
+                            });
+                            html += `<div class="config-line"> end-set</div></div>`;
+                        }
+                    });
+
+                    // Check for as-path-set references and show them below the policy
+                    const asPathMatches = line.match(/\\b(AS_PATH[A-Z0-9_]*)\\b/g) || [];
+                    asPathMatches.forEach(asPathName => {
+                        const asPathSet = bgpConfig.asPathSets.find(aps => aps.name === asPathName);
+                        if (asPathSet) {
+                            html += `<div class="original-config">
+                                <div class="config-line"> as-path-set ${asPathName}</div>`;
+                            asPathSet.paths.forEach(path => {
+                                html += `<div class="config-line">  ${path}</div>`;
+                            });
+                            html += `<div class="config-line"> end-set</div></div>`;
+                        }
+                    });
+
+                    container.innerHTML = html;
+                }
+                container.style.display = 'block';
+            } else {
+                container.style.display = 'none';
+            }
+        }
+
+        function expandPrefixSet(prefixName, uniqueId, show) {
+            const containerId = `prefixset_${prefixName}_${uniqueId}`;
+            const container = document.getElementById(containerId);
+            if (!container) return;
+
+            if (show) {
+                const prefixSet = bgpConfig.prefixSets[prefixName];
+                if (prefixSet) {
+                    let html = `<div class="original-config">
+                        <div class="config-line"> prefix-set ${prefixName}</div>`; // No checkbox for set start
+
+                    prefixSet.forEach(prefix => {
+                        html += `<div class="config-line">  ${prefix}<label><input type="checkbox"></label></div>`;
+                    });
+                    html += `<div class="config-line"> end-set</div></div>`; // No checkbox for end-set
+
+                    container.innerHTML = html;
+                }
+                container.style.display = 'block';
+            } else {
+                container.style.display = 'none';
+            }
+        }
+
+        function expandCommunitySet(commName, uniqueId, show) {
+            const containerId = `communityset_${commName}_${uniqueId}`;
+            const container = document.getElementById(containerId);
+            if (!container) return;
+
+            if (show) {
+                const commSet = bgpConfig.communitySets.find(cs => cs.name === commName);
+                if (commSet) {
+                    let html = `<div class="original-config">
+                        <div class="config-line"> community-set ${commName}</div>`; // No checkbox for set start
+
+                    commSet.communities.forEach(community => {
+                        html += `<div class="config-line">  ${community}<label><input type="checkbox"></label></div>`;
+                    });
+                    html += `<div class="config-line"> end-set</div></div>`; // No checkbox for end-set
+
+                    container.innerHTML = html;
+                }
+                container.style.display = 'block';
+            } else {
+                container.style.display = 'none';
+            }
+        }
+
+        function expandAsPathSet(asPathName, uniqueId, show) {
+            const containerId = `aspathset_${asPathName}_${uniqueId}`;
+            const container = document.getElementById(containerId);
+            if (!container) return;
+
+            if (show) {
+                const asPathSet = bgpConfig.asPathSets.find(aps => aps.name === asPathName);
+                if (asPathSet) {
+                    let html = `<div class="original-config">
+                        <div class="config-line"> as-path-set ${asPathName}</div>`; // No checkbox for set start
+
+                    asPathSet.paths.forEach(path => {
+                        html += `<div class="config-line">  ${path}<label><input type="checkbox"></label></div>`;
+                    });
+                    html += `<div class="config-line"> end-set</div></div>`; // No checkbox for end-set
+
+                    container.innerHTML = html;
+                }
+                container.style.display = 'block';
+            } else {
+                container.style.display = 'none';
+            }
+        }
+
+        // Helper functions for cascading display toggles (kept for compatibility)
+        function toggleGroupConfigDisplay(groupName, show) {
+            const element = document.getElementById(`group_${groupName}`);
+            if (element) {
+                element.style.display = show ? 'block' : 'none';
+            }
+        }
+
+        function togglePolicyConfigDisplay(policyName, show) {
+            const element = document.getElementById(`policy_${policyName}`);
+            if (element) {
+                element.style.display = show ? 'block' : 'none';
+            }
+        }
+
+        function togglePrefixSetSelection(prefixName, show) {
+            const element = document.getElementById(`prefixset_${prefixName}`);
+            if (element) {
+                element.style.display = show ? 'block' : 'none';
+            }
+            if (show) {
+                selectedPrefixSets.add(prefixName);
+            } else {
+                selectedPrefixSets.delete(prefixName);
+            }
+        }
+
+        function toggleCommunitySetDetailSelection(commName, show) {
+            const element = document.getElementById(`commset_${commName}`);
+            if (element) {
+                element.style.display = show ? 'block' : 'none';
+            }
+            if (show) {
+                selectedCommunitySets.add(commName);
+            } else {
+                selectedCommunitySets.delete(commName);
+            }
+        }
+
+        function togglePolicyLineSelection(policyName, lineIndex, selected) {
+            // Track individual policy line selections
+            const key = `${policyName}_${lineIndex}`;
+            if (selected) {
+                selectedPolicyLines.add(key);
+            } else {
+                selectedPolicyLines.delete(key);
+            }
+            console.log(`Policy: ${policyName}, Line: ${lineIndex}, Selected: ${selected}`);
+        }
+
+        function generateConfig() {
+            // Collect all visible configuration text from the page
+            let configText = '';
+
+            // Get all visible config-line elements
+            const configLines = document.querySelectorAll('.config-line');
+            const visibleLines = [];
+
+            configLines.forEach(line => {
+                // Check if this line is visible (not inside a hidden container)
+                let element = line;
+                let isVisible = true;
+
+                while (element && element !== document.body) {
+                    if (element.style && element.style.display === 'none') {
+                        isVisible = false;
+                        break;
+                    }
+                    element = element.parentElement;
+                }
+
+                if (isVisible) {
+                    // Get the text content, preserving indentation
+                    const textContent = line.textContent || line.innerText || '';
+                    if (textContent.trim()) {
+                        visibleLines.push(textContent);
+                    }
+                }
+            });
+
+            if (visibleLines.length === 0) {
+                alert('No configuration visible to generate. Please expand some neighbors or policies first.');
+                return;
+            }
+
+            // Join all visible lines
+            configText = visibleLines.join('\\n');
+
+            // Display the generated config
+            const configPanel = document.getElementById('configPanel');
+            const configOutput = document.getElementById('configOutput');
+            configOutput.textContent = configText;
+            configPanel.style.display = 'block';
+            configPanel.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function downloadConfig() {
+            const configOutput = document.getElementById('configOutput');
+            if (!configOutput.textContent) {
+                alert('No configuration generated yet. Please generate configuration first.');
+                return;
+            }
+
+            const blob = new Blob([configOutput.textContent], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `bgp_config_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>'''
+
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write(html_content.encode())
+
+    def _handle_file_upload(self):
+        """Handle file upload and parsing"""
+        try:
+            # Parse multipart form data
+            content_type = self.headers['Content-Type']
+            if 'multipart/form-data' not in content_type:
+                self._send_json_response(400, {'success': False, 'error': 'Invalid content type'})
+                return
+
+            # Get boundary
+            boundary = content_type.split('boundary=')[1].encode()
+
+            # Read the entire request body
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+
+            # Parse multipart data manually
+            parts = post_data.split(b'--' + boundary)
+
+            file_content = None
+            for part in parts:
+                if b'filename=' in part and b'Content-Type:' in part:
+                    # Extract file content
+                    content_start = part.find(b'\r\n\r\n') + 4
+                    if content_start > 3:
+                        file_content = part[content_start:].rstrip(b'\r\n').decode('utf-8', errors='ignore')
+                        break
+
+            if not file_content:
+                self._send_json_response(400, {'success': False, 'error': 'No file content found'})
+                return
+
+            # Parse the configuration
+            config = self.parser.parse_config(file_content)
+
+            self._send_json_response(200, {
+                'success': True,
+                'config': config
+            })
+
+        except Exception as e:
+            print(f"Upload error: {e}")
+            self._send_json_response(500, {'success': False, 'error': str(e)})
+
+    def _handle_config_generation(self):
+        """Handle configuration generation"""
+        try:
+            # Read JSON data
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length).decode('utf-8')
+            data = json.loads(post_data)
+
+            neighbors = data.get('neighbors', [])
+            policies = data.get('policies', [])
+            prefix_sets = data.get('prefixSets', [])
+            community_sets = data.get('communitySets', [])
+
+            # Generate configuration
+            config_lines = []
+            config_lines.append('! Generated BGP Configuration')
+            config_lines.append(f'! Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+            config_lines.append('!')
+
+            # Add selected prefix-sets
+            for prefix_name in prefix_sets:
+                if prefix_name in self.parser.bgp_config['prefixSets']:
+                    config_lines.append(f'prefix-set {prefix_name}')
+                    for prefix in self.parser.bgp_config['prefixSets'][prefix_name]:
+                        config_lines.append(f'  {prefix}')
+                    config_lines.append('end-set')
+                    config_lines.append('!')
+
+            # Add selected community-sets
+            for community_name in community_sets:
+                community_set = next((cs for cs in self.parser.bgp_config['communitySets'] if cs['name'] == community_name), None)
+                if community_set:
+                    config_lines.append(f'community-set {community_name}')
+                    for community in community_set['communities']:
+                        config_lines.append(f'  {community}')
+                    config_lines.append('end-set')
+                    config_lines.append('!')
+
+            # Add selected route policies
+            for policy_name in policies:
+                policy = next((p for p in self.parser.bgp_config['routePolicies'] if p['name'] == policy_name), None)
+                if policy:
+                    config_lines.append(f'route-policy {policy_name}')
+                    for line in policy['lines']:
+                        config_lines.append(f'  {line}')
+                    config_lines.append('end-policy')
+                    config_lines.append('!')
+
+            # Add BGP configuration for selected neighbors
+            if neighbors:
+                config_lines.append(f'router bgp {self.parser.bgp_config["asNumber"]}')
+                config_lines.append(f' bgp router-id {self.parser.bgp_config["routerId"]}')
+                config_lines.append('!')
+
+                # Process neighbors
+                global_neighbors = []
+                vrf_neighbors = {}
+
+                for neighbor_key in neighbors:
+                    neighbor_ip, context = neighbor_key.split('@')
+
+                    if context == 'Global':
+                        neighbor = next((n for n in self.parser.bgp_config['globalNeighbors'] if n['ip'] == neighbor_ip), None)
+                        if neighbor:
+                            global_neighbors.append(neighbor)
+                    else:
+                        vrf = next((v for v in self.parser.bgp_config['vrfs'] if v['name'] == context), None)
+                        if vrf:
+                            neighbor = next((n for n in vrf['neighbors'] if n['ip'] == neighbor_ip), None)
+                            if neighbor:
+                                if context not in vrf_neighbors:
+                                    vrf_neighbors[context] = {'vrf': vrf, 'neighbors': []}
+                                vrf_neighbors[context]['neighbors'].append(neighbor)
+
+                # Add global neighbors
+                for neighbor in global_neighbors:
+                    config_lines.append(f' neighbor {neighbor["ip"]}')
+                    for config_line in neighbor['configs']:
+                        if config_line.strip():
+                            config_lines.append(f' {config_line}')
+                    config_lines.append(' !')
+
+                # Add VRF neighbors
+                for context, vrf_data in vrf_neighbors.items():
+                    config_lines.append(f' vrf {context}')
+                    config_lines.append(f'  rd {vrf_data["vrf"]["rd"]}')
+                    for neighbor in vrf_data['neighbors']:
+                        config_lines.append(f'  neighbor {neighbor["ip"]}')
+                        for config_line in neighbor['configs']:
+                            if config_line.strip():
+                                config_lines.append(f'  {config_line}')
+                        config_lines.append('  !')
+                    config_lines.append(' !')
+
+                config_lines.append('!')
+
+            generated_config = '\n'.join(config_lines)
+
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(generated_config.encode())
+
+        except Exception as e:
+            print(f"Config generation error: {e}")
+            self._send_json_response(500, {'error': str(e)})
+
+    def _send_json_response(self, status_code, data):
+        """Send JSON response"""
+        self.send_response(status_code)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
+
+    def _send_404(self):
+        """Send 404 response"""
+        self.send_response(404)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'404 Not Found')
+
+def main():
+    PORT = 8080
+
+    # Test parsing with the actual config file first
+    if os.path.exists("/Users/qiaoshu/Documents/playground/full config.log"):
+        print("Testing parser with actual config file...")
+        parser = BGPParser()
+        with open("/Users/qiaoshu/Documents/playground/full config.log", 'r', encoding='utf-8-sig') as f:
+            content = f.read()
+        config = parser.parse_config(content)
+        print(f"Test parse results: AS {config['asNumber']}, Router ID {config['routerId']}")
+        print(f"Global neighbors: {len(config['globalNeighbors'])}")
+        print(f"VRFs: {len(config['vrfs'])}")
+        print(f"Route policies: {len(config['routePolicies'])}")
+        print(f"Prefix sets: {len(config['prefixSets'])}")
+        print()
+
+    with socketserver.TCPServer(("", PORT), BGPWebHandler) as httpd:
+        print(f"🌐 BGP Configuration Viewer starting...")
+        print(f"📡 Server running at http://localhost:{PORT}")
+        print(f"🔗 Open your browser and navigate to the URL above")
+        print(f"📁 Upload your 'full config.log' file to get started")
+        print(f"⏹️  Press Ctrl+C to stop the server")
+        print()
+
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("\n🛑 Server stopped by user")
+            httpd.shutdown()
+
+if __name__ == "__main__":
+    main()
