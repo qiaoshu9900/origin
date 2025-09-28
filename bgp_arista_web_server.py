@@ -55,10 +55,11 @@ class AristaBGPParser:
         return self.bgp_config
 
     def _parse_prefix_lists(self, lines):
-        """Parse ip prefix-list definitions"""
+        """Parse ip prefix-list definitions - supports both EOS formats"""
         i = 0
         while i < len(lines):
             line = lines[i].strip()
+            original_line = lines[i].rstrip()  # Keep original format with indentation
             if line.startswith('ip prefix-list '):
                 parts = line.split()
                 if len(parts) >= 3:
@@ -66,22 +67,54 @@ class AristaBGPParser:
                     if prefix_name not in self.bgp_config['prefixLists']:
                         self.bgp_config['prefixLists'][prefix_name] = []
                     
-                    # Look for subsequent seq lines
-                    i += 1
-                    while i < len(lines):
-                        next_line = lines[i].strip()
-                        if next_line.startswith('seq ') and ('permit' in next_line or 'deny' in next_line):
-                            # Extract the prefix entry from this seq line
-                            seq_parts = next_line.split()
-                            if len(seq_parts) >= 4:
-                                # Format: seq 10 permit 10.2.0.0/16 le 24
-                                seq_entry = ' '.join(seq_parts[2:])  # permit 10.2.0.0/16 le 24
-                                self.bgp_config['prefixLists'][prefix_name].append(seq_entry)
-                        elif next_line.startswith('ip prefix-list ') or next_line.startswith('!') or not next_line:
-                            # End of current prefix-list
-                            i -= 1  # Step back one line
-                            break
+                    # Check if this line itself contains seq info (Format 1: one-line)
+                    if 'seq' in line and ('permit' in line or 'deny' in line):
+                        # Format 1: ip prefix-list PREFIX_PEER_IN_1 seq 10 permit 10.2.0.0/16 le 24
+                        seq_idx = line.find('seq')
+                        seq_part = line[seq_idx:]  # seq 10 permit 10.2.0.0/16 le 24
+                        # Store the original full line format
+                        self.bgp_config['prefixLists'][prefix_name].append({
+                            'type': 'oneline',
+                            'original': original_line,
+                            'entry': seq_part
+                        })
+                    else:
+                        # Format 2: Multi-line format, look for subsequent indented seq lines
+                        # Store the header line
+                        header_stored = False
                         i += 1
+                        while i < len(lines):
+                            next_original_line = lines[i].rstrip()
+                            next_line = lines[i].strip()
+                            
+                            if (next_line.startswith('seq ') and 
+                                ('permit' in next_line or 'deny' in next_line) and
+                                lines[i].startswith('   ')):  # Check for indentation
+                                
+                                # Store header only once for multi-line format
+                                if not header_stored:
+                                    self.bgp_config['prefixLists'][prefix_name].append({
+                                        'type': 'multiline_header',
+                                        'original': original_line,
+                                        'entry': f'ip prefix-list {prefix_name}'
+                                    })
+                                    header_stored = True
+                                
+                                # Store each seq line with original indentation
+                                self.bgp_config['prefixLists'][prefix_name].append({
+                                    'type': 'multiline_seq',
+                                    'original': next_original_line,
+                                    'entry': next_line
+                                })
+                                
+                            elif (next_line.startswith('ip prefix-list ') or 
+                                  next_line.startswith('!') or 
+                                  not next_line or 
+                                  not lines[i].startswith(' ')):
+                                # End of current prefix-list
+                                i -= 1  # Step back one line
+                                break
+                            i += 1
             i += 1
 
     def _parse_community_lists(self, lines):
@@ -990,10 +1023,12 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
                         html += `<div class="config-line">${neighborIndent}neighbor ${neighborIp} peer group ${neighbor.peerGroup}<label><input type="checkbox" onchange="expandPeerGroup(&quot;${neighbor.peerGroup}&quot;, &quot;${neighborIp}&quot;, &quot;${context}&quot;, this.checked)"></label></div>`;
                     }
                     
-                    // Show remote-as
-                    html += `<div class="config-line">${neighborIndent}neighbor ${neighborIp} remote-as ${neighbor.remoteAs}</div>`;
+                    // Show remote-as only if it exists and is not empty
+                    if (neighbor.remoteAs && neighbor.remoteAs.trim() !== '') {
+                        html += `<div class="config-line">${neighborIndent}neighbor ${neighborIp} remote-as ${neighbor.remoteAs}</div>`;
+                    }
                     
-                    // Show description
+                    // Show description only if it exists
                     if (neighbor.description) {
                         html += `<div class="config-line">${neighborIndent}neighbor ${neighborIp} description "${neighbor.description}"</div>`;
                     }
@@ -1245,10 +1280,15 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
                 if (prefixList && prefixList.length > 0) {
                     let html = `<div class="original-config">`;
 
-                    prefixList.forEach((prefix, index) => {
-                        const seqNumber = (index + 1) * 10; // Generate sequence numbers
-                        // The prefix already contains the permit/deny and prefix info
-                        html += `<div class="config-line">ip prefix-list ${prefixName} seq ${seqNumber} ${prefix}</div>`;
+                    prefixList.forEach((prefixEntry) => {
+                        // Check if it's the new format with original line preserved
+                        if (typeof prefixEntry === 'object' && prefixEntry.original) {
+                            // Use the original line exactly as it appeared in config
+                            html += `<div class="config-line">${prefixEntry.original}</div>`;
+                        } else {
+                            // Fallback for old format (shouldn't happen after parsing fix)
+                            html += `<div class="config-line">ip prefix-list ${prefixName} seq 10 ${prefixEntry}</div>`;
+                        }
                     });
 
                     html += `</div>`;
