@@ -560,7 +560,7 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Arista EOS BGP 配置查看器</title>
+    <title>Arista EOS BGP Configuration Viewer</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
         .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
@@ -609,18 +609,18 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
 <body>
     <div class="container">
         <div class="header">
-            <h1>🍊 Arista EOS BGP 配置查看器</h1>
-            <p>Arista EOS BGP 配置分析工具</p>
+            <h1>🍊 Arista EOS BGP Configuration Viewer</h1>
+            <p>Arista EOS BGP Configuration Analysis Tool</p>
         </div>
 
         <div class="file-input">
-            <h3>📁 加载配置文件</h3>
+            <h3>📁 Load Configuration File</h3>
             <div id="uploadForm">
                 <input type="file" id="configFile" name="configFile" accept=".log,.txt,.cfg" required />
-                <button type="button" class="button" id="uploadBtn">上传并解析</button>
+                <button type="button" class="button" id="uploadBtn">Upload & Parse</button>
             </div>
             <p style="margin: 10px 0 0 0; font-size: 14px; color: #6c757d;">
-                选择您的Arista EOS配置文件（config.log）
+                Select your Arista EOS configuration file (config.log)
             </p>
             <div id="uploadStatus"></div>
         </div>
@@ -633,44 +633,44 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
                 </div>
                 <div class="stat-item">
                     <div class="stat-number" id="totalNeighbors">0</div>
-                    <div class="stat-label">总邻居数</div>
+                    <div class="stat-label">Total Neighbors</div>
                 </div>
                 <div class="stat-item">
                     <div class="stat-number" id="totalVrfs">0</div>
-                    <div class="stat-label">VRF数量</div>
+                    <div class="stat-label">VRFs</div>
                 </div>
                 <div class="stat-item">
                     <div class="stat-number" id="totalRouteMaps">0</div>
-                    <div class="stat-label">路由映射</div>
+                    <div class="stat-label">Route Maps</div>
                 </div>
                 <div class="stat-item">
                     <div class="stat-number" id="totalCommunityLists">0</div>
-                    <div class="stat-label">团体列表</div>
+                    <div class="stat-label">Community Lists</div>
                 </div>
             </div>
 
             <div class="controls">
-                <button class="button" onclick="expandAll()">📂 全部展开</button>
-                <button class="button" onclick="collapseAll()">📁 全部收起</button>
-                <button class="button" onclick="clearSelection()">🗑️ 清除选择</button>
-                <button class="button success" onclick="showSelectedDetails()">👁️ 查看选中项</button>
-                <button class="button success" onclick="generateConfig()">💾 生成配置</button>
+                <button class="button" onclick="expandAll()">📂 Expand All</button>
+                <button class="button" onclick="collapseAll()">📁 Collapse All</button>
+                <button class="button" onclick="clearSelection()">🗑️ Clear Selection</button>
+                <button class="button success" onclick="showSelectedDetails()">👁️ View Selected</button>
+                <button class="button success" onclick="generateConfig()">💾 Generate Config</button>
             </div>
             <div class="selected-items" id="selectedItems">
-                <h4>📋 选中的项目：</h4>
+                <h4>📋 Selected Items:</h4>
                 <div id="selectedItemsList"></div>
             </div>
 
             <div class="tree" id="bgpTree"></div>
 
             <div class="details-panel" id="detailsPanel">
-                <h3>📊 选中邻居详情</h3>
+                <h3>📊 Selected Neighbors Details</h3>
                 <div id="detailsContent"></div>
             </div>
 
             <div class="details-panel" id="configPanel">
-                <h3>⚙️ 生成的配置</h3>
-                <button class="button" onclick="downloadConfig()">💾 下载配置</button>
+                <h3>⚙️ Generated Configuration</h3>
+                <button class="button" onclick="downloadConfig()">💾 Download Config</button>
                 <div class="config-output" id="configOutput"></div>
             </div>
         </div>
@@ -700,12 +700,12 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
             const file = fileInput.files[0];
 
             if (!file) {
-                showStatus('请选择一个文件', 'error');
+                showStatus('Please select a file', 'error');
                 return;
             }
 
             formData.append('configFile', file);
-            showStatus('正在上传和解析配置...', 'loading');
+            showStatus('Uploading and parsing configuration...', 'loading');
 
             try {
                 const response = await fetch('/upload', {
@@ -718,16 +718,16 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
                     if (result.success) {
                         bgpConfig = result.config;
                         displayConfig();
-                        showStatus('配置加载成功！', 'success');
+                        showStatus('Configuration loaded successfully!', 'success');
                         document.getElementById('configContent').classList.remove('hidden');
                     } else {
-                        showStatus('错误: ' + result.error, 'error');
+                        showStatus('Error: ' + result.error, 'error');
                     }
                 } else {
-                    showStatus('上传失败: ' + response.statusText, 'error');
+                    showStatus('Upload failed: ' + response.statusText, 'error');
                 }
             } catch (error) {
-                showStatus('错误: ' + error.message, 'error');
+                showStatus('Error: ' + error.message, 'error');
             }
         }
 
@@ -764,7 +764,7 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
             // Global neighbors
             if (bgpConfig.globalNeighbors.length > 0) {
                 const globalSection = createTreeItem(
-                    `🌍 全局邻居 (${bgpConfig.globalNeighbors.length})`,
+                    `🌍 Global Neighbors (${bgpConfig.globalNeighbors.length})`,
                     'vrf-item', true
                 );
                 bgpChildren.appendChild(globalSection);
@@ -786,7 +786,7 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
             // VRF neighbors
             bgpConfig.vrfs.forEach(vrf => {
                 const vrfItem = createTreeItem(
-                    `📁 VRF ${vrf.name} (${vrf.neighbors.length} 邻居)`,
+                    `📁 VRF ${vrf.name} (${vrf.neighbors.length} neighbors)`,
                     'vrf-item', true
                 );
                 bgpChildren.appendChild(vrfItem);
@@ -879,15 +879,15 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
             let html = '';
 
             if (selectedNeighbors.size > 0) {
-                html += '<strong>邻居:</strong> ' + Array.from(selectedNeighbors).join(', ') + '<br>';
+                html += '<strong>Neighbors:</strong> ' + Array.from(selectedNeighbors).join(', ') + '<br>';
             }
 
             if (selectedRouteMaps.size > 0) {
-                html += '<strong>路由映射:</strong> ' + Array.from(selectedRouteMaps).join(', ') + '<br>';
+                html += '<strong>Route Maps:</strong> ' + Array.from(selectedRouteMaps).join(', ') + '<br>';
             }
 
             if (selectedCommunityLists.size > 0) {
-                html += '<strong>团体列表:</strong> ' + Array.from(selectedCommunityLists).join(', ');
+                html += '<strong>Community Lists:</strong> ' + Array.from(selectedCommunityLists).join(', ');
             }
 
             listDiv.innerHTML = html;
@@ -927,14 +927,14 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
 
         function showSelectedDetails() {
             if (selectedNeighbors.size === 0) {
-                alert('请至少选择一个邻居来查看详情。');
+                alert('Please select at least one neighbor to view details.');
                 return;
             }
 
             const detailsPanel = document.getElementById('detailsPanel');
             const detailsContent = document.getElementById('detailsContent');
 
-            let html = '<h3>🔍 详细配置分析</h3>';
+            let html = '<h3>🔍 Detailed Configuration Analysis</h3>';
 
             selectedNeighbors.forEach(neighborKey => {
                 const [neighborIp, context] = neighborKey.split('@');
@@ -948,10 +948,11 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
                 }
 
                 if (neighbor) {
-                    html += `<div class="route-map">
+                    const neighborId = `neighbor_${neighborIp}_${context.toLowerCase()}`;
+                    html += `<div class="route-map" id="${neighborId}">
                         <h4>🔗 ${neighbor.ip} (${context})</h4>`;
 
-                    html += `<div><strong>📄 原始配置:</strong>
+                    html += `<div><strong>📄 Original Configuration:</strong>
                         <div class="original-config">`;
 
                     // Display original Arista EOS format - all neighbor commands are flat
@@ -1290,15 +1291,90 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
             }
         }
 
+        function formatConfigLines(lines) {
+            if (lines.length === 0) return '';
+            
+            const formattedLines = [];
+            let lastConfigBlockType = null;
+            
+            lines.forEach((line, index) => {
+                const trimmedLine = line.trim();
+                const originalLine = line;
+                let currentConfigBlockType = null;
+                
+                // Identify config block types based on line content
+                if (trimmedLine.startsWith('route-map ')) {
+                    const parts = trimmedLine.split(' ');
+                    if (parts.length >= 4) {
+                        // Different route-maps are different blocks
+                        currentConfigBlockType = `route-map_${parts[1]}`;
+                    }
+                } else if (trimmedLine.startsWith('ip prefix-list ')) {
+                    const parts = trimmedLine.split(' ');
+                    if (parts.length >= 3) {
+                        currentConfigBlockType = `prefix-list_${parts[2]}`;
+                    }
+                } else if (trimmedLine.startsWith('ip community-list ')) {
+                    const parts = trimmedLine.split(' ');
+                    if (parts.length >= 3) {
+                        currentConfigBlockType = `community-list_${parts[2]}`;
+                    }
+                } else if (trimmedLine.startsWith('ip access-list ')) {
+                    const parts = trimmedLine.split(' ');
+                    if (parts.length >= 3) {
+                        currentConfigBlockType = `access-list_${parts[2]}`;
+                    }
+                } else if (trimmedLine.startsWith('ip as-path access-list ')) {
+                    const parts = trimmedLine.split(' ');
+                    if (parts.length >= 4) {
+                        currentConfigBlockType = `as-path-list_${parts[3]}`;
+                    }
+                } else if (trimmedLine.startsWith('neighbor ')) {
+                    const parts = trimmedLine.split(' ');
+                    if (parts.length >= 2) {
+                        const neighborTarget = parts[1];
+                        // Check if it's an IP address or peer group name
+                        if (neighborTarget.match(/^\\d+\\.\\d+\\.\\d+\\.\\d+$/)) {
+                            // IP address neighbor block
+                            currentConfigBlockType = `neighbor-ip_${neighborTarget}`;
+                        } else {
+                            // Peer group neighbor block
+                            currentConfigBlockType = `neighbor-group_${neighborTarget}`;
+                        }
+                    }
+                }
+                
+                // Add blank line before new config block (except for first line)
+                if (currentConfigBlockType && 
+                    lastConfigBlockType && 
+                    currentConfigBlockType !== lastConfigBlockType && 
+                    formattedLines.length > 0) {
+                    formattedLines.push(''); // Add blank line
+                }
+                
+                formattedLines.push(line);
+                
+                // Update last config block type
+                if (currentConfigBlockType) {
+                    lastConfigBlockType = currentConfigBlockType;
+                }
+            });
+            
+            return formattedLines.join('\\n');
+        }
+
         function generateConfig() {
             let configText = '';
             const configLines = document.querySelectorAll('.config-line');
-            const visibleLines = [];
+            const visibleConfigSections = [];
+            let currentNeighborInfo = null;
+            let currentSectionLines = [];
 
             configLines.forEach(line => {
                 let element = line;
                 let isVisible = true;
 
+                // Check if line is visible
                 while (element && element !== document.body) {
                     if (element.style && element.style.display === 'none') {
                         isVisible = false;
@@ -1310,17 +1386,107 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
                 if (isVisible) {
                     const textContent = line.textContent || line.innerText || '';
                     if (textContent.trim()) {
-                        visibleLines.push(textContent);
+                        // Try to determine neighbor context from DOM hierarchy
+                        let neighborContext = null;
+                        let parentElement = line.parentElement;
+                        
+                        // Look for neighbor context in parent hierarchy
+                        while (parentElement && parentElement !== document.body) {
+                            if (parentElement.id && parentElement.id.startsWith('neighbor_')) {
+                                const parts = parentElement.id.split('_');
+                                if (parts.length >= 3) {
+                                    const neighborIp = parts[1];
+                                    const vrfType = parts.slice(2).join('_'); // Handle VRF names with underscores like vrf_a
+                                    neighborContext = {
+                                        ip: neighborIp,
+                                        vrf: vrfType === 'global' ? 'Global' : vrfType.toUpperCase().replace('VRF_', 'VRF_')
+                                    };
+                                    break;
+                                }
+                            }
+                            parentElement = parentElement.parentElement;
+                        }
+
+                        // If we found a new neighbor context, save previous section and start new one
+                        if (neighborContext && 
+                            (!currentNeighborInfo || 
+                             currentNeighborInfo.ip !== neighborContext.ip || 
+                             currentNeighborInfo.vrf !== neighborContext.vrf)) {
+                            
+                            // Save previous section if exists
+                            if (currentNeighborInfo && currentSectionLines.length > 0) {
+                                visibleConfigSections.push({
+                                    neighbor: currentNeighborInfo,
+                                    lines: [...currentSectionLines]
+                                });
+                                currentSectionLines = [];
+                            }
+                            
+                            currentNeighborInfo = neighborContext;
+                        }
+
+                        // Add line to current section (skip header lines)
+                        if (!textContent.startsWith('🔗') && !textContent.includes('Original Configuration:')) {
+                            currentSectionLines.push(textContent);
+                        }
                     }
                 }
             });
 
-            if (visibleLines.length === 0) {
-                alert('没有可见的配置用于生成。请先展开一些邻居或策略。');
-                return;
+            // Add the last section if exists
+            if (currentNeighborInfo && currentSectionLines.length > 0) {
+                visibleConfigSections.push({
+                    neighbor: currentNeighborInfo,
+                    lines: [...currentSectionLines]
+                });
             }
 
-            configText = visibleLines.join('\\n');
+            // If no neighbor-specific sections found, fall back to original behavior
+            if (visibleConfigSections.length === 0) {
+                const allVisibleLines = [];
+                configLines.forEach(line => {
+                    let element = line;
+                    let isVisible = true;
+
+                    while (element && element !== document.body) {
+                        if (element.style && element.style.display === 'none') {
+                            isVisible = false;
+                            break;
+                        }
+                        element = element.parentElement;
+                    }
+
+                    if (isVisible) {
+                        const textContent = line.textContent || line.innerText || '';
+                        if (textContent.trim() && !textContent.startsWith('🔗') && !textContent.includes('Original Configuration:')) {
+                            allVisibleLines.push(textContent);
+                        }
+                    }
+                });
+
+                if (allVisibleLines.length === 0) {
+                    alert('No configuration visible to generate. Please expand some neighbors or policies first.');
+                    return;
+                }
+
+                configText = formatConfigLines(allVisibleLines);
+            } else {
+                // Generate config with neighbor separators
+                const configParts = [];
+                visibleConfigSections.forEach((section, index) => {
+                    const separator = `!\\n! ******** ${section.neighbor.ip} (${section.neighbor.vrf}) ********\\n!`;
+                    configParts.push(separator);
+                    
+                    // Format section lines with spacing between different config blocks
+                    const formattedLines = formatConfigLines(section.lines);
+                    configParts.push(formattedLines);
+                    
+                    if (index < visibleConfigSections.length - 1) {
+                        configParts.push('!'); // Add blank line between sections (except after last)
+                    }
+                });
+                configText = configParts.join('\\n');
+            }
 
             const configPanel = document.getElementById('configPanel');
             const configOutput = document.getElementById('configOutput');
@@ -1332,7 +1498,7 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
         function downloadConfig() {
             const configOutput = document.getElementById('configOutput');
             if (!configOutput.textContent) {
-                alert('还没有生成配置。请先生成配置。');
+                alert('No configuration generated yet. Please generate configuration first.');
                 return;
             }
 
@@ -1520,31 +1686,31 @@ def main():
 
     # Test parsing with the actual Arista config file first
     if os.path.exists("/Users/qiaoshu/Documents/playground/arista config.log"):
-        print("正在测试解析器与实际配置文件...")
+        print("Testing parser with actual config file...")
         parser = AristaBGPParser()
         with open("/Users/qiaoshu/Documents/playground/arista config.log", 'r', encoding='utf-8-sig') as f:
             content = f.read()
         config = parser.parse_config(content)
-        print(f"测试解析结果: AS {config['asNumber']}, Router ID {config['routerId']}")
-        print(f"全局邻居: {len(config['globalNeighbors'])}")
-        print(f"VRF数量: {len(config['vrfs'])}")
-        print(f"路由映射: {len(config['routeMaps'])}")
-        print(f"前缀列表: {len(config['prefixLists'])}")
-        print(f"对等组: {len(config['peerGroups'])}")
+        print(f"Test parse results: AS {config['asNumber']}, Router ID {config['routerId']}")
+        print(f"Global neighbors: {len(config['globalNeighbors'])}")
+        print(f"VRFs: {len(config['vrfs'])}")
+        print(f"Route maps: {len(config['routeMaps'])}")
+        print(f"Prefix lists: {len(config['prefixLists'])}")
+        print(f"Peer groups: {len(config['peerGroups'])}")
         print()
 
     with socketserver.TCPServer(("", PORT), AristaBGPWebHandler) as httpd:
-        print(f"🍊 Arista EOS BGP 配置查看器启动中...")
-        print(f"📡 服务器运行在 http://localhost:{PORT}")
-        print(f"🔗 打开浏览器并导航到上面的URL")
-        print(f"📁 上传您的 'arista config.log' 文件开始使用")
-        print(f"⏹️  按 Ctrl+C 停止服务器")
+        print(f"🍊 Arista EOS BGP Configuration Viewer starting...")
+        print(f"📡 Server running at http://localhost:{PORT}")
+        print(f"🔗 Open your browser and navigate to the URL above")
+        print(f"📁 Upload your 'arista config.log' file to get started")
+        print(f"⏹️  Press Ctrl+C to stop the server")
         print()
 
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
-            print("\n🛑 用户停止了服务器")
+            print("\n🛑 Server stopped by user")
             httpd.shutdown()
 
 if __name__ == "__main__":
