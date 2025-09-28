@@ -92,24 +92,47 @@ class AristaBGPParser:
             if line.startswith('ip community-list '):
                 parts = line.split()
                 if len(parts) >= 3:
-                    community_name = parts[2]
-                    communities = []
+                    # Handle different formats:
+                    # ip community-list STANDARD name permit communities...
+                    # ip community-list regexp name permit pattern
+                    # ip community-list name permit communities...
                     
-                    # Extract community values from this line
-                    if 'permit' in line:
-                        permit_idx = line.find('permit')
-                        community_values = line[permit_idx + 6:].strip().split()
-                        communities.extend(community_values)
+                    community_type = "standard"  # default
+                    name_idx = 2
                     
-                    # Check if this community list already exists
-                    existing = next((cl for cl in self.bgp_config['communityLists'] if cl['name'] == community_name), None)
-                    if existing:
-                        existing['communities'].extend(communities)
-                    else:
-                        self.bgp_config['communityLists'].append({
-                            'name': community_name,
-                            'communities': communities
-                        })
+                    if parts[2] in ['standard', 'expanded', 'regexp']:
+                        community_type = parts[2]
+                        name_idx = 3
+                    
+                    if len(parts) > name_idx:
+                        community_name = parts[name_idx]
+                        communities = []
+                        
+                        # Extract community values from this line
+                        if 'permit' in line:
+                            permit_idx = line.find('permit')
+                            community_values_str = line[permit_idx + 6:].strip()
+                            
+                            # For regexp type, keep as single pattern
+                            if community_type == 'regexp':
+                                communities = [community_values_str]
+                            else:
+                                # Split by spaces for standard community values
+                                community_values = community_values_str.split()
+                                communities.extend(community_values)
+                        
+                        # Check if this community list already exists
+                        existing = next((cl for cl in self.bgp_config['communityLists'] if cl['name'] == community_name), None)
+                        if existing:
+                            existing['communities'].extend(communities)
+                            if community_type != "standard":
+                                existing['type'] = community_type
+                        else:
+                            self.bgp_config['communityLists'].append({
+                                'name': community_name,
+                                'communities': communities,
+                                'type': community_type
+                            })
             i += 1
 
     def _parse_access_lists(self, lines):
@@ -204,15 +227,19 @@ class AristaBGPParser:
                                 for match in prefix_matches:
                                     prefix_sets.add(match)
                             
-                            # Find community-list references
-                            if 'community-list' in line:
-                                comm_matches = re.findall(r'community-list\s+(\w+)', line)
+                            # Find community references (both match and set commands)
+                            if 'match community' in line:
+                                comm_matches = re.findall(r'match community\s+(\w+)', line)
+                                for match in comm_matches:
+                                    community_sets.add(match)
+                            elif 'set community community-list' in line:
+                                comm_matches = re.findall(r'set community community-list\s+(\w+)', line)
                                 for match in comm_matches:
                                     community_sets.add(match)
                             
                             # Find as-path references
-                            if 'as-path' in line:
-                                as_path_matches = re.findall(r'as-path\s+(\w+)', line)
+                            if 'match as-path' in line:
+                                as_path_matches = re.findall(r'match as-path\s+(\w+)', line)
                                 for match in as_path_matches:
                                     as_path_sets.add(match)
                         
@@ -1089,7 +1116,7 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
                          let hasExpandableReference = false;
                          let expandHtml = originalLine;
                          
-                         // Check for prefix-list
+                         // Check for prefix-list (match ip address prefix-list or just prefix-list)
                          if (trimmedLine.includes('prefix-list')) {
                              const prefixMatch = trimmedLine.match(/prefix-list\\s+(\\w+)/);
                              if (prefixMatch) {
@@ -1098,9 +1125,15 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
                              }
                          }
                          
-                         // Check for community-list
-                         if (trimmedLine.includes('community-list')) {
-                             const commMatch = trimmedLine.match(/community-list\\s+(\\w+)/);
+                         // Check for community references (both match and set commands)
+                         if (trimmedLine.includes('match community')) {
+                             const commMatch = trimmedLine.match(/match community\\s+(\\w+)/);
+                             if (commMatch) {
+                                 expandHtml += `<label><input type="checkbox" onchange="expandCommunityList(&quot;${commMatch[1]}&quot;, &quot;${routeMapName}_${neighborId}_${index}&quot;, this.checked)"></label>`;
+                                 hasExpandableReference = true;
+                             }
+                         } else if (trimmedLine.includes('set community community-list')) {
+                             const commMatch = trimmedLine.match(/set community community-list\\s+(\\w+)/);
                              if (commMatch) {
                                  if (!hasExpandableReference) expandHtml += `<label>`;
                                  expandHtml += `<input type="checkbox" onchange="expandCommunityList(&quot;${commMatch[1]}&quot;, &quot;${routeMapName}_${neighborId}_${index}&quot;, this.checked)">`;
@@ -1109,7 +1142,7 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
                              }
                          }
                          
-                         // Check for access-list
+                         // Check for access-list (match ip address access-list)
                          if (trimmedLine.includes('access-list')) {
                              const accessMatch = trimmedLine.match(/access-list\\s+(\\w+)/);
                              if (accessMatch) {
@@ -1120,9 +1153,9 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
                              }
                          }
                          
-                         // Check for as-path
-                         if (trimmedLine.includes('as-path')) {
-                             const asPathMatch = trimmedLine.match(/as-path\\s+(\\w+)/);
+                         // Check for as-path (match as-path)
+                         if (trimmedLine.includes('match as-path')) {
+                             const asPathMatch = trimmedLine.match(/match as-path\\s+(\\w+)/);
                              if (asPathMatch) {
                                  if (!hasExpandableReference) expandHtml += `<label>`;
                                  expandHtml += `<input type="checkbox" onchange="expandAsPathSet(&quot;${asPathMatch[1]}&quot;, &quot;${routeMapName}_${neighborId}_${index}&quot;, this.checked)">`;
@@ -1152,10 +1185,17 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
                                 }
                             });
 
-                            // Community-list containers
-                            const commMatches = line.match(/community-list\\s+(\\w+)/g) || [];
-                            commMatches.forEach(match => {
-                                const commName = match.split(' ')[1];
+                            // Community-list containers (both match and set commands)
+                            const commMatches1 = line.match(/match community\\s+(\\w+)/g) || [];
+                            const commMatches2 = line.match(/set community community-list\\s+(\\w+)/g) || [];
+                            const allCommMatches = [...commMatches1, ...commMatches2];
+                            allCommMatches.forEach(match => {
+                                let commName;
+                                if (match.includes('match community')) {
+                                    commName = match.replace('match community ', '');
+                                } else {
+                                    commName = match.replace('set community community-list ', '');
+                                }
                                 const setId = `communitylist_${commName}_${routeMapName}_${neighborId}_${index}`;
                                 if (!addedSets.has(setId)) {
                                     addedSets.add(setId);
@@ -1174,10 +1214,10 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
                                 }
                             });
 
-                            // AS-path containers
-                            const asPathMatches = line.match(/as-path\\s+(\\w+)/g) || [];
+                            // AS-path containers (match as-path)
+                            const asPathMatches = line.match(/match as-path\\s+(\\w+)/g) || [];
                             asPathMatches.forEach(match => {
-                                const asPathName = match.split(' ')[1];
+                                const asPathName = match.replace('match as-path ', '');
                                 const setId = `aspathset_${asPathName}_${routeMapName}_${neighborId}_${index}`;
                                 if (!addedSets.has(setId)) {
                                     addedSets.add(setId);
@@ -1202,16 +1242,21 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
 
             if (show) {
                 const prefixList = bgpConfig.prefixLists[prefixName];
-                if (prefixList) {
-                    let html = `<div class="original-config">
-                        <div class="config-line">ip prefix-list ${prefixName}</div>`;
+                if (prefixList && prefixList.length > 0) {
+                    let html = `<div class="original-config">`;
 
-                    prefixList.forEach(prefix => {
-                        html += `<div class="config-line"> seq 10 ${prefix}</div>`;
+                    prefixList.forEach((prefix, index) => {
+                        const seqNumber = (index + 1) * 10; // Generate sequence numbers
+                        // The prefix already contains the permit/deny and prefix info
+                        html += `<div class="config-line">ip prefix-list ${prefixName} seq ${seqNumber} ${prefix}</div>`;
                     });
 
                     html += `</div>`;
                     container.innerHTML = html;
+                } else {
+                    container.innerHTML = `<div class="original-config">
+                        <div class="config-line">! No entries found for prefix-list ${prefixName}</div>
+                    </div>`;
                 }
                 container.style.display = 'block';
             } else {
@@ -1226,16 +1271,28 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
 
             if (show) {
                 const commList = bgpConfig.communityLists.find(cl => cl.name === commName);
-                if (commList) {
-                    let html = `<div class="original-config">
-                        <div class="config-line">ip community-list ${commName}</div>`;
+                if (commList && commList.communities.length > 0) {
+                    let html = `<div class="original-config">`;
 
+                    const commType = commList.type || 'standard';
+                    
                     commList.communities.forEach(community => {
-                        html += `<div class="config-line"> permit ${community}</div>`;
+                        if (commType === 'regexp') {
+                            html += `<div class="config-line">ip community-list regexp ${commName} permit ${community}</div>`;
+                        } else if (commType === 'expanded') {
+                            html += `<div class="config-line">ip community-list expanded ${commName} permit ${community}</div>`;
+                        } else {
+                            // Standard community list - handle multiple communities in one line if needed
+                            html += `<div class="config-line">ip community-list ${commName} permit ${community}</div>`;
+                        }
                     });
 
                     html += `</div>`;
                     container.innerHTML = html;
+                } else {
+                    container.innerHTML = `<div class="original-config">
+                        <div class="config-line">! No entries found for community-list ${commName}</div>
+                    </div>`;
                 }
                 container.style.display = 'block';
             } else {
@@ -1274,16 +1331,20 @@ class AristaBGPWebHandler(http.server.BaseHTTPRequestHandler):
 
             if (show) {
                 const asPathSet = bgpConfig.asPathSets.find(aps => aps.name === asPathName);
-                if (asPathSet) {
-                    let html = `<div class="original-config">
-                        <div class="config-line">ip as-path access-list ${asPathName}</div>`;
+                if (asPathSet && asPathSet.paths.length > 0) {
+                    let html = `<div class="original-config">`;
 
                     asPathSet.paths.forEach(path => {
-                        html += `<div class="config-line">   permit ${path}</div>`;
+                        // The path already contains the AS path pattern
+                        html += `<div class="config-line">ip as-path access-list ${asPathName} permit ${path}</div>`;
                     });
 
                     html += `</div>`;
                     container.innerHTML = html;
+                } else {
+                    container.innerHTML = `<div class="original-config">
+                        <div class="config-line">! No entries found for as-path access-list ${asPathName}</div>
+                    </div>`;
                 }
                 container.style.display = 'block';
             } else {
